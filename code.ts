@@ -116,7 +116,11 @@ const formatName = (node: ComponentNode) => {
   return node.name;
 };
 
-const parseSelection = (baseNode: BaseNode, ignoredSections: string[]) => {
+/** Start the scan for Components in the current selection */
+const scanSelection = (ignoredSections: string[]) => {
+  const baseNode: BaseNode = figma.currentPage.selection[0]
+    ? figma.currentPage.selection[0]
+    : figma.currentPage;
   if (!('findAll' in baseNode)) {
     return;
   }
@@ -150,12 +154,7 @@ const parseSelection = (baseNode: BaseNode, ignoredSections: string[]) => {
 };
 
 // This monitors the selection changes and posts the selection to the UI
-figma.on('selectionchange', () =>
-  parseSelection(
-    figma.currentPage.selection[0] as PageNode | InstanceNode | FrameNode,
-    ignoredSections
-  )
-);
+figma.on('selectionchange', () => scanSelection(ignoredSections));
 
 /** Main handler for `focus-instance` */
 const handleFocusInstance = (pageId: string, instanceId: string) => {
@@ -176,16 +175,31 @@ const handleFocusInstance = (pageId: string, instanceId: string) => {
 };
 
 figma.ui.onmessage = (msg, props) => {
-  if (msg.type === 'focus-instance') {
-    handleFocusInstance(msg.pageId, msg.instanceId);
-  }
-  if (msg.type === 'scan') {
-    ignoredSections = msg.ignoredSections;
-    parseSelection(
-      figma.currentPage.selection[0]
-        ? figma.currentPage.selection[0]
-        : figma.currentPage,
-      ignoredSections
-    );
+  switch (msg.type) {
+    case 'focus-instance': {
+      handleFocusInstance(msg.pageId, msg.instanceId);
+      return;
+    }
+    case 'scan': {
+      ignoredSections = msg.ignoredSections;
+      figma.clientStorage.setAsync('ignored-sections', ignoredSections);
+      console.log('ignored-sections set', ignoredSections);
+      scanSelection(ignoredSections);
+      return;
+    }
+    case 'init': {
+      figma.clientStorage
+        .getAsync('ignored-sections')
+        .then((ignoredSections: string[] = msg.default || []) => {
+          figma.ui.postMessage({
+            type: 'settings-retrieved',
+            ignoredSections,
+          });
+          scanSelection(ignoredSections);
+        });
+      return;
+    }
+    default:
+      console.error('unsupported message', msg);
   }
 };

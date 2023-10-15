@@ -133,17 +133,34 @@
     width: 100%;
     padding: 0.5em;
   }
+
+  .input-with-button {
+    display: flex;
+    flex-direction: column;
+    gap: 1em;
+    margin-bottom: 1em;
+  }
+  .input-with-button button {
+    padding-inline: 2em;
+  }
+
+  .hide {
+    display: hidden;
+  }
 </style>
 
 <p>
   Decomposes all Figma Components of the current selection ordered by
   dependency.
 </p>
-<div class="input-holder">
+<div class="input-holder hide">
   <label
     >Comma separated list of ignored Figma Sections
     <i>(to ignore all Components contain within them)</i>:
-    <input id="ignored-sections" type="text" value="Typography" />
+    <span class="input-with-button">
+      <input id="ignored-sections" type="text" value="Typography" />
+      <button id="save-settings">Save</button>
+    </span>
   </label>
 </div>
 <div id="processing"><i>processing&hellip;</i></div>
@@ -232,16 +249,27 @@
     outlet.appendChild(wrapper);
   };
 
+  const ignoredSections = document.getElementById('ignored-sections');
+  const saveSettings = document.getElementById('save-settings');
+
   onmessage = ({ data: { pluginMessage } }) => {
-    if (pluginMessage.type === 'result') {
-      document.getElementById('processing').style.display = 'none';
-      renderResults(pluginMessage.componentsWithDependencies);
+    switch (pluginMessage.type) {
+      case 'result': {
+        document.getElementById('processing').style.display = 'none';
+        renderResults(pluginMessage.componentsWithDependencies);
+        return;
+      }
+      case 'settings-retrieved': {
+        console.log('ui', pluginMessage);
+        ignoredSections.value = pluginMessage.ignoredSections.join(', ');
+        document
+          .getElementsByClassName('input-holder')[0]
+          .classList.remove('hide');
+      }
     }
   };
 
-  const ignoredSections = document.getElementById('ignored-sections');
-
-  const getFormatedIgnoredSections = () =>
+  const getFormattedIgnoredSections = () =>
     ignoredSections
       ? ignoredSections.value
           .split(',')
@@ -249,12 +277,12 @@
           .filter((v) => v !== '')
       : [];
 
-  ignoredSections.addEventListener('blur', () => {
+  saveSettings.addEventListener('click', () => {
     parent.postMessage(
       {
         pluginMessage: {
           type: 'scan',
-          ignoredSections: getFormatedIgnoredSections(),
+          ignoredSections: getFormattedIgnoredSections(),
         },
       },
       '*'
@@ -264,8 +292,8 @@
   parent.postMessage(
     {
       pluginMessage: {
-        type: 'scan',
-        ignoredSections: getFormatedIgnoredSections(),
+        type: 'init',
+        default: getFormattedIgnoredSections(),
       },
     },
     '*'
