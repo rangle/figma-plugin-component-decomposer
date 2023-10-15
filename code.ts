@@ -28,14 +28,22 @@ const getPage = (node: BaseNode): PageNode | undefined => {
 };
 
 /** global var to hold ignored Sections set in UI */
-let ignoredSections: string[] = [];
+let ignoredSectionsOrFrames: string[] = [];
 
-/** Helper to recursively check if node is in one of the submitted sections */
-const isContainedInSection = (node: BaseNode, sections: string[]): boolean => {
-  if (node.parent?.type === 'SECTION' && sections.includes(node.parent.name)) {
+/** Helper to recursively check if node is in one of the submitted Sections/Frames */
+const isContainedInSectionOrFrame = (
+  node: BaseNode,
+  sections: string[]
+): boolean => {
+  if (
+    (node.parent?.type === 'SECTION' || node.parent?.type === 'FRAME') &&
+    sections.includes(node.parent.name)
+  ) {
     return true;
   }
-  return node.parent ? isContainedInSection(node.parent, sections) : false;
+  return node.parent
+    ? isContainedInSectionOrFrame(node.parent, sections)
+    : false;
 };
 
 const updateFinds = (
@@ -117,7 +125,7 @@ const formatName = (node: ComponentNode) => {
 };
 
 /** Start the scan for Components in the current selection */
-const scanSelection = (ignoredSections: string[]) => {
+const scanSelection = (ignoredSectionsOrFrames: string[]) => {
   const baseNode: BaseNode = figma.currentPage.selection[0]
     ? figma.currentPage.selection[0]
     : figma.currentPage;
@@ -129,7 +137,9 @@ const scanSelection = (ignoredSections: string[]) => {
     baseNode,
     [],
     []
-  ).filter((r) => !isContainedInSection(r.node, ignoredSections));
+  ).filter(
+    (r) => !isContainedInSectionOrFrame(r.node, ignoredSectionsOrFrames)
+  );
 
   figma.ui.postMessage({
     type: 'result',
@@ -142,7 +152,9 @@ const scanSelection = (ignoredSections: string[]) => {
           pageId: getPage(r.node)?.id,
         },
         dependsOn: r.dependsOn
-          .filter((d) => !isContainedInSection(d, ignoredSections))
+          .filter(
+            (d) => !isContainedInSectionOrFrame(d, ignoredSectionsOrFrames)
+          )
           .map((d) => ({
             id: d.id,
             name: formatName(d),
@@ -154,7 +166,7 @@ const scanSelection = (ignoredSections: string[]) => {
 };
 
 // This monitors the selection changes and posts the selection to the UI
-figma.on('selectionchange', () => scanSelection(ignoredSections));
+figma.on('selectionchange', () => scanSelection(ignoredSectionsOrFrames));
 
 /** Main handler for `focus-instance` */
 const handleFocusInstance = (pageId: string, instanceId: string) => {
@@ -181,21 +193,24 @@ figma.ui.onmessage = (msg, props) => {
       return;
     }
     case 'scan': {
-      ignoredSections = msg.ignoredSections;
-      figma.clientStorage.setAsync('ignored-sections', ignoredSections);
-      console.log('ignored-sections set', ignoredSections);
-      scanSelection(ignoredSections);
+      ignoredSectionsOrFrames = msg.ignoredSectionsOrFrames;
+      figma.clientStorage.setAsync(
+        'ignored-sections-or-frames',
+        ignoredSectionsOrFrames
+      );
+      console.log('ignored-sections-or-frames set', ignoredSectionsOrFrames);
+      scanSelection(ignoredSectionsOrFrames);
       return;
     }
     case 'init': {
       figma.clientStorage
-        .getAsync('ignored-sections')
-        .then((ignoredSections: string[] = msg.default || []) => {
+        .getAsync('ignored-sections-or-frames')
+        .then((ignoredSectionsOrFrames: string[] = msg.default || []) => {
           figma.ui.postMessage({
             type: 'settings-retrieved',
-            ignoredSections,
+            ignoredSectionsOrFrames: ignoredSectionsOrFrames,
           });
-          scanSelection(ignoredSections);
+          scanSelection(ignoredSectionsOrFrames);
         });
       return;
     }

@@ -155,10 +155,10 @@
 </p>
 <div class="input-holder hide">
   <label
-    >Comma separated list of ignored Figma Sections
+    >Comma separated list of ignored Figma Sections/Frames
     <i>(to ignore all Components contain within them)</i>:
     <span class="input-with-button">
-      <input id="ignored-sections" type="text" value="Typography" />
+      <input id="ignored-sections-or-frames" type="text" value="Typography" />
       <button id="save-settings">Save</button>
     </span>
   </label>
@@ -249,7 +249,9 @@
     outlet.appendChild(wrapper);
   };
 
-  const ignoredSections = document.getElementById('ignored-sections');
+  const ignoredSectionsOrFrames = document.getElementById(
+    'ignored-sections-or-frames'
+  );
   const saveSettings = document.getElementById('save-settings');
 
   onmessage = ({ data: { pluginMessage } }) => {
@@ -261,7 +263,8 @@
       }
       case 'settings-retrieved': {
         console.log('ui', pluginMessage);
-        ignoredSections.value = pluginMessage.ignoredSections.join(', ');
+        ignoredSectionsOrFrames.value =
+          pluginMessage.ignoredSectionsOrFrames.join(', ');
         document
           .getElementsByClassName('input-holder')[0]
           .classList.remove('hide');
@@ -269,9 +272,9 @@
     }
   };
 
-  const getFormattedIgnoredSections = () =>
-    ignoredSections
-      ? ignoredSections.value
+  const getFormattedIgnoredSectionsOrFrames = () =>
+    ignoredSectionsOrFrames
+      ? ignoredSectionsOrFrames.value
           .split(',')
           .map((v) => v.trim())
           .filter((v) => v !== '')
@@ -282,7 +285,7 @@
       {
         pluginMessage: {
           type: 'scan',
-          ignoredSections: getFormattedIgnoredSections(),
+          ignoredSectionsOrFrames: getFormattedIgnoredSectionsOrFrames(),
         },
       },
       '*'
@@ -293,7 +296,7 @@
     {
       pluginMessage: {
         type: 'init',
-        default: getFormattedIgnoredSections(),
+        default: getFormattedIgnoredSectionsOrFrames(),
       },
     },
     '*'
