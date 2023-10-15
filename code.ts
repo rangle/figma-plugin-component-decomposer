@@ -143,25 +143,37 @@ const scanSelection = (ignoredSectionsOrFrames: string[]) => {
 
   figma.ui.postMessage({
     type: 'result',
-    componentsWithDependencies: componentsWithDependencies.map((r) => {
-      return {
-        ...r,
-        node: {
-          id: r.node.id,
-          name: formatName(r.node),
-          pageId: getPage(r.node)?.id,
-        },
-        dependsOn: r.dependsOn
-          .filter(
-            (d) => !isContainedInSectionOrFrame(d, ignoredSectionsOrFrames)
-          )
-          .map((d) => ({
-            id: d.id,
-            name: formatName(d),
-            pageId: getPage(d)?.id,
-          })),
-      };
-    }),
+    componentsWithDependencies: componentsWithDependencies
+      .map((r) => {
+        return {
+          ...r,
+          node: {
+            id: r.node.id,
+            name: formatName(r.node),
+            pageId: getPage(r.node)?.id,
+          },
+          dependsOn: r.dependsOn
+            .filter(
+              (d) => !isContainedInSectionOrFrame(d, ignoredSectionsOrFrames)
+            )
+            .map((d) => ({
+              id: d.id,
+              name: formatName(d),
+              pageId: getPage(d)?.id,
+            })),
+        };
+      })
+      .sort((a, b) => {
+        const aIsStandalone = a.dependsOn.length === 0;
+        const bIsStandalone = b.dependsOn.length === 0;
+        if (aIsStandalone && !bIsStandalone) {
+          return -1;
+        }
+        if (bIsStandalone && !aIsStandalone) {
+          return 1;
+        }
+        return 0;
+      }),
   });
 };
 
