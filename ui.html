@@ -1,14 +1,273 @@
-
-  <h2>Selection Change Observer</h2>
-  <p>Observe the contents of figma.selection change as you change the selection in the file.</p>
-  <p>ID of selection is: </p>
-  <p id=selection></p>
-
-  <script>
-
-  onmessage = (event) => {
-    document.getElementById('selection').innerHTML = event.data.pluginMessage[0] ? event.data.pluginMessage[0].id : 'No selection';
+<!-- Figma needs all code in a single file and does not support CSS imports etc.
+  For now it's ok to keep all in a file but we might need to add
+  a build step later -->
+<style>
+  body {
+    background-color: var(--figma-color-bg);
+    color: var(--figma-color-text);
+    font-family: Inter, sans-serif;
+    font-size: 11px;
+    line-height: 16px;
+    letter-spacing: calc(0.005px + var(--text-tracking-pos, 0) * 11px);
   }
 
-  </script>
-  
+  button {
+    text-align: center;
+    flex-shrink: 0;
+    height: 32px;
+    line-height: 30px;
+    padding: 0 11px;
+    background-color: transparent;
+    box-sizing: border-box;
+    color: var(--figma-color-text);
+    border: 1px solid var(--figma-color-border);
+    box-sizing: border-box;
+    border-radius: 6px;
+  }
+
+  button svg path {
+    fill: var(--figma-color-text);
+  }
+
+  button:hover {
+    color: var(--figma-color-text-hover);
+    background-color: var(--figma-color-bg-hover);
+  }
+
+  button:hover svg path {
+    fill: var(--figma-color-text-hover);
+  }
+
+  button:disabled,
+  button:disabled:hover {
+    color: var(--figma-color-text-disabled);
+    border: 1px solid var(--figma-color-border-disabled);
+    background-color: transparent;
+  }
+
+  button + button {
+    margin-left: 15px;
+  }
+
+  textarea {
+    font-family: sans-serif;
+    width: 100%;
+    padding: 0.5em;
+    margin: 0 0 0.5em;
+  }
+
+  ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  form {
+    margin: 0;
+  }
+
+  .button-holder {
+    padding: 1em 0;
+    text-align: right;
+  }
+
+  .focus-instance-button {
+    font-size: 1.5em;
+    line-height: 0.5em;
+  }
+
+  .result {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5em 1em;
+    gap: 1em;
+  }
+
+  .result.detached {
+    color: var(--figma-color-text-disabled);
+  }
+  .result.detached button:disabled {
+    background-color: var(--figma-color-bg-success);
+  }
+
+  .actions {
+    white-space: nowrap;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5em;
+  }
+
+  .actions button + button {
+    margin: 0;
+  }
+
+  #results {
+    margin-top: 1em;
+  }
+
+  .result {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+  }
+  .result span {
+    padding-left: 2em;
+  }
+
+  .result .dependencies li {
+    padding-left: 1em;
+  }
+
+  #processing {
+    text-align: center;
+    margin-top: 20vh;
+  }
+
+  .input-holder {
+    display: flex;
+    flex-direction: column;
+  }
+  .input-holder input {
+    display: block;
+    width: 100%;
+    padding: 0.5em;
+  }
+</style>
+
+<p>
+  Decomposes all Figma Components of the current selection ordered by
+  dependency.
+</p>
+<div class="input-holder">
+  <label
+    >Comma separated list of ignored Figma Sections
+    <i>(to ignore all Components contain within them)</i>:
+    <input id="ignored-sections" type="text" value="Typography" />
+  </label>
+</div>
+<div id="processing"><i>processing&hellip;</i></div>
+<div id="results"></div>
+
+<script>
+  const writeTextToClipboard = (text) => {
+    const prevActive = document.activeElement;
+    const textArea = document.createElement('textarea');
+
+    textArea.value = text;
+
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+
+    document.body.appendChild(textArea);
+
+    textArea.focus();
+    textArea.select();
+
+    return new Promise((res, rej) => {
+      document.execCommand('copy') ? res() : rej();
+      textArea.remove();
+
+      prevActive.focus();
+    });
+  };
+
+  const renderResults = (componentsWithDependencies) => {
+    const outlet = document.getElementById('results');
+    outlet.innerHTML = '';
+    wrapper = document.createElement('div');
+    wrapper.innerHTML = `
+      <h3>Contained Components (${componentsWithDependencies.length})</h3>
+      <ul>
+          ${componentsWithDependencies
+            .map((result) => {
+              return `<li class="result">
+              <strong>${
+                result.node.name
+              } <button class="focus-instance-button" data-page-id="${
+                result.node.pageId
+              }" data-instance-id="${
+                result.node.id
+              }" title="Focus Instance">⌖</button></strong>
+              <span>usage count: ${result.count}</span>
+              <span>depends on <strong>${
+                result.dependsOn.length === 0
+                  ? 'none'
+                  : `${result.dependsOn.length}:`
+              }</strong></br>${
+                result.dependsOn.length > 0
+                  ? `<ul class="dependencies">${result.dependsOn
+                      .map(
+                        (d) =>
+                          `<li>${d.name} <button class="focus-instance-button" data-page-id="${d.pageId}" data-instance-id="${d.id}" title="Focus Instance">⌖</button></li>`
+                      )
+                      .join('\n')}</ul>`
+                  : ''
+              }</span>
+            </li>`;
+            })
+            .join('\n')}
+        </ul>`;
+    wrapper.addEventListener('click', (evt) => {
+      const target = evt.target.closest('button');
+      if (!target || target.hasAttribute('disabled')) {
+        // don't react to non-button or disabled button clicks
+        return;
+      }
+      console.log('click', target);
+      const pageId = target.getAttribute('data-page-id');
+      const instanceId = target.getAttribute('data-instance-id');
+      parent.postMessage(
+        {
+          pluginMessage: {
+            type: 'focus-instance',
+            pageId,
+            instanceId,
+          },
+        },
+        '*'
+      );
+    });
+    outlet.appendChild(wrapper);
+  };
+
+  onmessage = ({ data: { pluginMessage } }) => {
+    if (pluginMessage.type === 'result') {
+      document.getElementById('processing').style.display = 'none';
+      renderResults(pluginMessage.componentsWithDependencies);
+    }
+  };
+
+  const ignoredSections = document.getElementById('ignored-sections');
+
+  const getFormatedIgnoredSections = () =>
+    ignoredSections
+      ? ignoredSections.value
+          .split(',')
+          .map((v) => v.trim())
+          .filter((v) => v !== '')
+      : [];
+
+  ignoredSections.addEventListener('blur', () => {
+    parent.postMessage(
+      {
+        pluginMessage: {
+          type: 'scan',
+          ignoredSections: getFormatedIgnoredSections(),
+        },
+      },
+      '*'
+    );
+  });
+
+  parent.postMessage(
+    {
+      pluginMessage: {
+        type: 'scan',
+        ignoredSections: getFormatedIgnoredSections(),
+      },
+    },
+    '*'
+  );
+</script>

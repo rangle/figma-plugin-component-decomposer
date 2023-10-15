@@ -7,26 +7,185 @@
 // full browser environment (See https://www.figma.com/plugin-docs/how-plugins-run).
 
 // This shows the HTML page in "ui.html".
-figma.showUI(__html__);
+figma.showUI(__html__, { themeColors: true });
+
+type CoreNodeInfo = { id: string; pageId: string; name: string };
+type ComponentCount = {
+  node: ComponentNode;
+  count: number;
+  dependsOn: ComponentNode[];
+};
+
+const isInstanceNode = (node: BaseNode): node is InstanceNode =>
+  node.type === 'INSTANCE';
+
+/** Helper to get the Page a node is contained in */
+const getPage = (node: BaseNode): PageNode | undefined => {
+  if (node.parent?.type === 'PAGE') {
+    return node.parent;
+  }
+  return node.parent ? getPage(node.parent) : undefined;
+};
+
+/** global var to hold ignored Sections set in UI */
+let ignoredSections: string[] = [];
+
+/** Helper to recursively check if node is in one of the submitted sections */
+const isContainedInSection = (node: BaseNode, sections: string[]): boolean => {
+  if (node.parent?.type === 'SECTION' && sections.includes(node.parent.name)) {
+    return true;
+  }
+  return node.parent ? isContainedInSection(node.parent, sections) : false;
+};
+
+const updateFinds = (
+  finds: ComponentCount[],
+  node: ComponentNode
+): ComponentCount[] => {
+  const index = finds.findIndex((c) => c.node.id === node.id);
+  if (index >= 0) {
+    finds[index].count++;
+    return finds;
+  }
+  return [
+    ...finds,
+    {
+      node,
+      dependsOn: [],
+      count: 1,
+    },
+  ];
+};
+
+const findComponentsRecursive = (
+  node: BaseNode,
+  parentComponentIds: string[],
+  finds: ComponentCount[]
+): ComponentCount[] => {
+  if (!node) {
+    return finds;
+  }
+  if (isInstanceNode(node)) {
+    const mainComponent = node.mainComponent;
+    if (mainComponent === null) {
+      return finds;
+    }
+
+    // mark dependencies
+    parentComponentIds.forEach((p) => {
+      finds.forEach((f) => {
+        if (f.node.id === p && !f.dependsOn.includes(mainComponent)) {
+          f.dependsOn.push(mainComponent);
+        }
+      });
+    });
+
+    let updatedFinds = [...finds];
+    if (node.children) {
+      node.children.forEach((childNode) => {
+        updatedFinds = findComponentsRecursive(
+          childNode,
+          parentComponentIds.includes(mainComponent.id)
+            ? parentComponentIds
+            : [...parentComponentIds, mainComponent.id],
+          updatedFinds
+        );
+      });
+    }
+    return updateFinds(updatedFinds, mainComponent);
+  }
+
+  if (!('children' in node) || !node.children) {
+    return finds;
+  }
+  let updatedFinds = [...finds];
+  node.children.forEach((childNode) => {
+    updatedFinds = findComponentsRecursive(
+      childNode,
+      parentComponentIds,
+      updatedFinds
+    );
+  });
+  return updatedFinds;
+};
+
+const formatName = (node: ComponentNode) => {
+  if (node.variantProperties && node.parent?.type === 'COMPONENT_SET') {
+    return node.parent.name;
+  }
+  return node.name;
+};
+
+const parseSelection = (baseNode: BaseNode, ignoredSections: string[]) => {
+  if (!('findAll' in baseNode)) {
+    return;
+  }
+
+  const componentsWithDependencies = findComponentsRecursive(
+    baseNode,
+    [],
+    []
+  ).filter((r) => !isContainedInSection(r.node, ignoredSections));
+
+  figma.ui.postMessage({
+    type: 'result',
+    componentsWithDependencies: componentsWithDependencies.map((r) => {
+      return {
+        ...r,
+        node: {
+          id: r.node.id,
+          name: formatName(r.node),
+          pageId: getPage(r.node)?.id,
+        },
+        dependsOn: r.dependsOn
+          .filter((d) => !isContainedInSection(d, ignoredSections))
+          .map((d) => ({
+            id: d.id,
+            name: formatName(d),
+            pageId: getPage(d)?.id,
+          })),
+      };
+    }),
+  });
+};
 
 // This monitors the selection changes and posts the selection to the UI
-figma.on("selectionchange", () => {
-  let allInstances = [];
-  let destinctInstances = [];
+figma.on('selectionchange', () =>
+  parseSelection(
+    figma.currentPage.selection[0] as PageNode | InstanceNode | FrameNode,
+    ignoredSections
+  )
+);
 
-  allInstances = [];
-  destinctInstances = [];
-  figma.currentPage.findAll((node) => {
-    if (node.type === "INSTANCE" && node.mainComponent?.name) {
-      // console.log('>>>', node.mainComponent?.name);
-      allInstances.push(node.mainComponent.name);
-      if (!destinctInstances.includes(node.mainComponent.name)) {
-        console.log(node.mainComponent.name, node);
-        destinctInstances.push(node.mainComponent.name);
-      }
-    }
-  }); // as InstanceNode[];
-  console.log(destinctInstances.sort());
+/** Main handler for `focus-instance` */
+const handleFocusInstance = (pageId: string, instanceId: string) => {
+  const page = figma.getNodeById(pageId) as PageNode;
+  const node = figma.getNodeById(instanceId) as SceneNode;
+  if (!page || !node) {
+    const error = `Could not find ${
+      !page ? 'Page' : 'Node'
+    } with ID: ${instanceId}`;
+    console.error(error);
+    figma.ui.postMessage({ type: 'error', error });
+    return;
+  }
 
-  figma.ui.postMessage(figma.currentPage.selection);
-});
+  page.selection = [node];
+  figma.currentPage = page;
+  figma.viewport.scrollAndZoomIntoView([node]);
+};
+
+figma.ui.onmessage = (msg, props) => {
+  if (msg.type === 'focus-instance') {
+    handleFocusInstance(msg.pageId, msg.instanceId);
+  }
+  if (msg.type === 'scan') {
+    ignoredSections = msg.ignoredSections;
+    parseSelection(
+      figma.currentPage.selection[0]
+        ? figma.currentPage.selection[0]
+        : figma.currentPage,
+      ignoredSections
+    );
+  }
+};
