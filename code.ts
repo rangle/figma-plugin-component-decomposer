@@ -11,9 +11,9 @@ figma.showUI(__html__, { themeColors: true });
 
 type CoreNodeInfo = { id: string; pageId: string; name: string };
 type ComponentCount = {
-  node: ComponentNode;
+  node: ComponentNode | ComponentSetNode;
   count: number;
-  dependsOn: ComponentNode[];
+  dependsOn: (ComponentNode | ComponentSetNode)[];
 };
 
 const isInstanceNode = (node: BaseNode): node is InstanceNode =>
@@ -48,7 +48,7 @@ const isContainedInSectionOrFrame = (
 
 const updateFinds = (
   finds: ComponentCount[],
-  node: ComponentNode
+  node: ComponentNode | ComponentSetNode
 ): ComponentCount[] => {
   const index = finds.findIndex((c) => c.node.id === node.id);
   if (index >= 0) {
@@ -60,22 +60,34 @@ const updateFinds = (
     {
       node,
       dependsOn: [],
-      count: 1,
+      count: node.type === 'COMPONENT_SET' ? 0 : 1, // don't count the initial wrapper
     },
   ];
+};
+
+/** Resolves to the `ComponentNode` or `ComponentSetNode` for Components with Variants */
+const getMainComponent = ({ mainComponent }: InstanceNode) => {
+  if (mainComponent?.parent?.type === 'COMPONENT_SET') {
+    return mainComponent.parent;
+  }
+  return mainComponent;
 };
 
 const findComponentsRecursive = (
   node: BaseNode,
   parentComponentIds: string[],
-  finds: ComponentCount[]
+  finds: ComponentCount[],
+  ignoredSectionsOrFrames: string[]
 ): ComponentCount[] => {
-  if (!node) {
+  if (!node || isContainedInSectionOrFrame(node, ignoredSectionsOrFrames)) {
     return finds;
   }
   if (isInstanceNode(node)) {
-    const mainComponent = node.mainComponent;
-    if (mainComponent === null) {
+    const mainComponent = getMainComponent(node);
+    if (
+      mainComponent === null ||
+      isContainedInSectionOrFrame(mainComponent, ignoredSectionsOrFrames)
+    ) {
       return finds;
     }
 
@@ -96,7 +108,8 @@ const findComponentsRecursive = (
           parentComponentIds.includes(mainComponent.id)
             ? parentComponentIds
             : [...parentComponentIds, mainComponent.id],
-          updatedFinds
+          updatedFinds,
+          ignoredSectionsOrFrames
         );
       });
     }
@@ -111,17 +124,11 @@ const findComponentsRecursive = (
     updatedFinds = findComponentsRecursive(
       childNode,
       parentComponentIds,
-      updatedFinds
+      updatedFinds,
+      ignoredSectionsOrFrames
     );
   });
   return updatedFinds;
-};
-
-const formatName = (node: ComponentNode) => {
-  if (node.variantProperties && node.parent?.type === 'COMPONENT_SET') {
-    return node.parent.name;
-  }
-  return node.name;
 };
 
 /** Start the scan for Components in the current selection */
@@ -136,44 +143,39 @@ const scanSelection = (ignoredSectionsOrFrames: string[]) => {
   const componentsWithDependencies = findComponentsRecursive(
     baseNode,
     [],
-    []
-  ).filter(
-    (r) => !isContainedInSectionOrFrame(r.node, ignoredSectionsOrFrames)
-  );
+    [],
+    ignoredSectionsOrFrames
+  ).map((r) => {
+    return {
+      ...r,
+      node: {
+        id: r.node.id,
+        name: r.node.name,
+        pageId: getPage(r.node)?.id,
+      },
+      dependsOn: r.dependsOn
+        // .filter((d) => !isContainedInSectionOrFrame(d, ignoredSectionsOrFrames))
+        .map((d) => ({
+          id: d.id,
+          name: d.name,
+          pageId: getPage(d)?.id,
+        })),
+    };
+  });
 
   figma.ui.postMessage({
     type: 'result',
-    componentsWithDependencies: componentsWithDependencies
-      .map((r) => {
-        return {
-          ...r,
-          node: {
-            id: r.node.id,
-            name: formatName(r.node),
-            pageId: getPage(r.node)?.id,
-          },
-          dependsOn: r.dependsOn
-            .filter(
-              (d) => !isContainedInSectionOrFrame(d, ignoredSectionsOrFrames)
-            )
-            .map((d) => ({
-              id: d.id,
-              name: formatName(d),
-              pageId: getPage(d)?.id,
-            })),
-        };
-      })
-      .sort((a, b) => {
-        const aIsStandalone = a.dependsOn.length === 0;
-        const bIsStandalone = b.dependsOn.length === 0;
-        if (aIsStandalone && !bIsStandalone) {
-          return -1;
-        }
-        if (bIsStandalone && !aIsStandalone) {
-          return 1;
-        }
-        return 0;
-      }),
+    componentsWithDependencies: componentsWithDependencies.sort((a, b) => {
+      const aIsStandalone = a.dependsOn.length === 0;
+      const bIsStandalone = b.dependsOn.length === 0;
+      if (aIsStandalone && !bIsStandalone) {
+        return -1;
+      }
+      if (bIsStandalone && !aIsStandalone) {
+        return 1;
+      }
+      return 0;
+    }),
   });
 };
 
@@ -198,7 +200,7 @@ const handleFocusInstance = (pageId: string, instanceId: string) => {
   figma.viewport.scrollAndZoomIntoView([node]);
 };
 
-figma.ui.onmessage = (msg, props) => {
+figma.ui.onmessage = async (msg, props) => {
   switch (msg.type) {
     case 'focus-instance': {
       handleFocusInstance(msg.pageId, msg.instanceId);
@@ -206,24 +208,22 @@ figma.ui.onmessage = (msg, props) => {
     }
     case 'scan': {
       ignoredSectionsOrFrames = msg.ignoredSectionsOrFrames;
-      figma.clientStorage.setAsync(
+      await figma.clientStorage.setAsync(
         'ignored-sections-or-frames',
         ignoredSectionsOrFrames
       );
-      console.log('ignored-sections-or-frames set', ignoredSectionsOrFrames);
       scanSelection(ignoredSectionsOrFrames);
       return;
     }
     case 'init': {
-      figma.clientStorage
-        .getAsync('ignored-sections-or-frames')
-        .then((ignoredSectionsOrFrames: string[] = msg.default || []) => {
-          figma.ui.postMessage({
-            type: 'settings-retrieved',
-            ignoredSectionsOrFrames: ignoredSectionsOrFrames,
-          });
-          scanSelection(ignoredSectionsOrFrames);
-        });
+      ignoredSectionsOrFrames = await figma.clientStorage.getAsync(
+        'ignored-sections-or-frames'
+      );
+      figma.ui.postMessage({
+        type: 'settings-retrieved',
+        ignoredSectionsOrFrames: ignoredSectionsOrFrames,
+      });
+      scanSelection(ignoredSectionsOrFrames);
       return;
     }
     default:
