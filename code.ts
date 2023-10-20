@@ -60,7 +60,7 @@ const updateFinds = (
     {
       node,
       dependsOn: [],
-      count: node.type === 'COMPONENT_SET' ? 0 : 1, // don't count the initial wrapper
+      count: 1,
     },
   ];
 };
